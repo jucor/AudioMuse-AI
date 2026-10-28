@@ -28,6 +28,8 @@ Main Features:
 * A dropped session is replaced once before the database is declared unhealthy
 * An unreachable database returns False and is logged with its traceback
 * A programming error in the probe surfaces instead of faking an unhealthy database
+* macOS and Linux reap the children of a supervisor that died mid-boot, before
+  it wrote its pid file
 """
 
 import importlib.util
@@ -999,4 +1001,26 @@ class TestSupervisorFatalErrorsAreWrittenToAFile:
         assert 'RuntimeError: the supervisor blew up' in text, (
             'a hidden console swallowed every supervisor traceback; the file is '
             'the only place a crash can be read back from'
+        )
+
+
+class TestAPosixSupervisorThatDiedMidBootLeavesNoOrphanBehind:
+    def test_posix_startup_reaps_orphans_even_without_a_pid_file(self, tmp_path, monkeypatch):
+        mod = _load_supervisor('macos')
+        sup = _bare_supervisor(mod)
+        monkeypatch.setattr(mod.paths, 'pid_file', lambda: str(tmp_path / 'no-such-pidfile.json'))
+        monkeypatch.setattr(mod.paths, 'pgdata_dir', lambda: str(tmp_path / 'pgdata'))
+        exe = sys.executable
+        procs = [
+            _FakeProc(os.getpid(), 'me', [exe]),
+            _FakeProc(601, 'orphan', [exe, '--role=worker-default']),
+            _FakeProc(602, 'postgres', ['/pg/bin/postgres', '-D', str(tmp_path / 'pgdata')]),
+        ]
+        monkeypatch.setitem(sys.modules, 'psutil', _fake_psutil(procs))
+
+        sup._reap_orphans()
+
+        assert [p.info['pid'] for p in procs if p.terminated] == [601, 602], (
+            'the pid file is only written once a boot completes, so a supervisor that '
+            'died mid-boot leaves none: its children must still be found by the scan'
         )

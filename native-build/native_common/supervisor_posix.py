@@ -25,7 +25,8 @@ Main Features:
 * stop_all reaches the stopped state even when a stop step fails, so a
   relaunch is never blocked waiting on it
 * Startup reaps --role= children of this executable that a dead supervisor left
-  behind, restarted ones included, not only the pids of the last pid file
+  behind, restarted ones included, not only the pids of the last pid file, and
+  even when that supervisor died mid-boot, before writing one
 * Orphan reaping from the pid file left by a previous run, plus any server still
   holding our data directory
 * A per-platform cache-clearing hook that runs after the orphan reap and before
@@ -288,6 +289,7 @@ class PosixSupervisor(SupervisorCommonMixin, HealthLoopMixin):
     def _reap_orphans(self):
         path = self.paths.pid_file()
         if not os.path.exists(path):
+            self._reap_stale_infra()
             return
         try:
             with open(path) as fh:
